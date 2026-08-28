@@ -1,0 +1,31 @@
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+
+# Root node_modules
+node_modules/
+
+# Backend
+backend/venv/
+backend/__pycache__/
+backend/app/__pycache__/
+*.pyc
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# VS Code
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -40,7 +40,7 @@ import EventsPageLive from "./EventsPage";
 import AnalystPageLive from "./AnalystPage";
 import "./App.css";
 
-const API = "https://enviguard-backend.onrender.com";
+const API = "https://enviguard-backend.onrender.com/api";
 
 const HAZARDS = [
   {

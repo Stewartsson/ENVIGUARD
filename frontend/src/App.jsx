@@ -37,8 +37,8 @@ import {
 } from "recharts";
 import LiveMap from "./LiveMap";
 import EventsPageLive from "./EventsPage";
-import AnalystPageLive from "./AnalystPage";
 import "./App.css";
+
 
 const API = "https://enviguard-backend.onrender.com/api";
 
@@ -146,6 +146,8 @@ function App() {
 
   const [events, setEvents] = useState([]);
   const [alerts, setAlerts] = useState([]);
+  const [sensorData, setSensorData] = useState([]);
+  const [lastSensorData, setLastSensorData] = useState({});
 
   const [loading, setLoading] = useState(false);
   const [backendOnline, setBackendOnline] = useState(false);
@@ -153,21 +155,82 @@ function App() {
   const loadData = async () => {
     setLoading(true);
 
+    // Keep the three data streams independent. A temporary failure in
+    // events/alerts must never erase the last valid sensor reading.
     try {
-      const [eventsResponse, alertsResponse] = await Promise.all([
-        axios.get(`${API}/events`),
-        axios.get(`${API}/alerts`),
-      ]);
+      const response = await axios.get(`${API}/sensor-data`, {
+        timeout: 4000,
+        params: { _t: Date.now() },
+        headers: { "Cache-Control": "no-cache" },
+      });
 
-      setEvents(eventsResponse.data?.data || []);
-      setAlerts(alertsResponse.data?.data || []);
+      const incoming = response.data?.data;
+
+      if (Array.isArray(incoming) && incoming.length > 0) {
+        setSensorData(incoming);
+
+        setLastSensorData((previous) => {
+          const updated = { ...previous };
+
+          incoming.forEach((reading) => {
+            if (!reading?.node_id) return;
+
+            const node = reading.node_id;
+            const previousReading = updated[node] || {};
+            const previousMeasurements =
+              previousReading.measurements || {};
+
+            // IMPORTANT:
+            // Merge measurements instead of replacing them.
+            // The ESP water node currently sends only
+            // turbidity_raw + ph_digital. Older/full readings
+            // may contain pH/TDS/temperature/DO. Merging prevents
+            // those valid values from flashing to "--".
+            updated[node] = {
+              ...previousReading,
+              ...reading,
+              measurements: {
+                ...previousMeasurements,
+                ...(reading.measurements || {}),
+              },
+            };
+          });
+
+          return updated;
+        });
+      }
+
       setBackendOnline(true);
     } catch (error) {
-      console.error("Backend connection error:", error);
-      setBackendOnline(false);
-    } finally {
-      setLoading(false);
+      console.error("Sensor API error:", error);
+      // Do not clear sensorData/lastSensorData.
     }
+
+    try {
+      const response = await axios.get(`${API}/events`, {
+        timeout: 4000,
+      });
+
+      if (Array.isArray(response.data?.data)) {
+        setEvents(response.data.data);
+      }
+    } catch (error) {
+      console.error("Events API error:", error);
+    }
+
+    try {
+      const response = await axios.get(`${API}/alerts`, {
+        timeout: 4000,
+      });
+
+      if (Array.isArray(response.data?.data)) {
+        setAlerts(response.data.data);
+      }
+    } catch (error) {
+      console.error("Alerts API error:", error);
+    }
+
+    setLoading(false);
   };
 
   useEffect(() => {
@@ -193,6 +256,30 @@ function App() {
 
     return result;
   }, [events]);
+
+  const latestSensorByNode = useMemo(() => {
+    const result = { ...lastSensorData };
+
+    for (const reading of sensorData) {
+      const node = reading?.node_id;
+      if (!node) continue;
+
+      const previous = result[node] || {};
+      const previousMeasurements =
+        previous.measurements || {};
+
+      result[node] = {
+        ...previous,
+        ...reading,
+        measurements: {
+          ...previousMeasurements,
+          ...(reading.measurements || {}),
+        },
+      };
+    }
+
+    return result;
+  }, [sensorData, lastSensorData]);
 
   const criticalEvents = events.filter(
     (event) =>
@@ -256,6 +343,13 @@ function App() {
           </button>
 
           <button
+            className={page === "nodes" ? "active" : ""}
+            onClick={() => navigate("nodes")}
+          >
+            NODE NETWORK
+          </button>
+
+          <button
             className={page === "events" ? "active" : ""}
             onClick={() => navigate("events")}
           >
@@ -316,6 +410,7 @@ function App() {
           <HazardPage
             hazard={selectedHazard}
             event={latestEvents[selectedHazard.node]}
+            sensorReading={latestSensorByNode[selectedHazard.node]}
             events={events}
             onBack={() => navigate("command")}
             onRefresh={loadData}
@@ -325,9 +420,23 @@ function App() {
 
         {page === "map" && <LiveMap />}
 
+        {page === "nodes" && (
+          <NodeNetworkPage
+            hazards={HAZARDS}
+            latestEvents={latestEvents}
+            backendOnline={backendOnline}
+            onOpenHazard={openHazard}
+          />
+        )}
+
         {page === "events" && <EventsPageLive />}
 
-        {page === "analyst" && <AnalystPageLive />}
+        {page === "analyst" && (
+          <AnalystPage
+            hazards={HAZARDS}
+            latestEvents={latestEvents}
+          />
+        )}
 
         {page === "analytics" && (
           <AnalyticsPage
@@ -662,12 +771,238 @@ function CommandPage({
 }
 
 /* =========================================================
+   7-NODE EDGE AI NETWORK
+========================================================= */
+
+function NodeNetworkPage({
+  hazards,
+  latestEvents,
+  backendOnline,
+  onOpenHazard,
+}) {
+  const onlineNodes = hazards.filter(
+    (hazard) => Boolean(latestEvents[hazard.node])
+  ).length;
+
+  const highRiskNodes = hazards.filter((hazard) => {
+    const risk = Number(latestEvents[hazard.node]?.risk_score || 0);
+    return risk >= 60;
+  }).length;
+
+  return (
+    <div className="page">
+      <PageTitle
+        eyebrow="DISTRIBUTED EDGE INTELLIGENCE"
+        title="7-NODE ENVIGUARD NETWORK"
+        subtitle="Each environmental monitoring node is treated as an independent edge intelligence unit."
+      />
+
+      <section
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+          gap: "14px",
+          marginBottom: "28px",
+        }}
+      >
+        <div className="panel" style={{ padding: "18px" }}>
+          <div className="mini-eyebrow">TOTAL NODES</div>
+          <strong style={{ fontSize: "30px" }}>07</strong>
+          <p style={{ margin: "6px 0 0" }}>Distributed monitoring units</p>
+        </div>
+
+        <div className="panel" style={{ padding: "18px" }}>
+          <div className="mini-eyebrow">DATA ACTIVE</div>
+          <strong style={{ fontSize: "30px" }}>{onlineNodes}/7</strong>
+          <p style={{ margin: "6px 0 0" }}>Nodes reporting event data</p>
+        </div>
+
+        <div className="panel" style={{ padding: "18px" }}>
+          <div className="mini-eyebrow">HIGH RISK</div>
+          <strong style={{ fontSize: "30px" }}>{highRiskNodes}</strong>
+          <p style={{ margin: "6px 0 0" }}>Nodes above 60% risk</p>
+        </div>
+
+        <div className="panel" style={{ padding: "18px" }}>
+          <div className="mini-eyebrow">EDGE MODE</div>
+          <strong style={{ fontSize: "18px" }}>
+            {backendOnline ? "CONNECTED" : "LOCAL READY"}
+          </strong>
+          <p style={{ margin: "6px 0 0" }}>Local decision architecture ready</p>
+        </div>
+      </section>
+
+      <section className="section">
+        <SectionHeading
+          eyebrow="NODE-BY-NODE INTELLIGENCE"
+          title="Independent Monitoring Units"
+          subtitle="Every node has its own hazard profile, risk state and edge-AI readiness."
+        />
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+            gap: "16px",
+          }}
+        >
+          {hazards.map((hazard, index) => {
+            const event = latestEvents[hazard.node];
+            const risk = Number(event?.risk_score || 0);
+            const severity = getSeverity(risk);
+            const Icon = hazard.icon;
+            const active = Boolean(event);
+
+            return (
+              <button
+                key={hazard.node}
+                onClick={() => onOpenHazard(hazard)}
+                style={{
+                  textAlign: "left",
+                  border: `1px solid ${hazard.color}55`,
+                  borderRadius: "14px",
+                  padding: "20px",
+                  background: "rgba(7,17,30,0.88)",
+                  color: "inherit",
+                  cursor: "pointer",
+                  minHeight: "235px",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: "16px",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: "46px",
+                      height: "46px",
+                      borderRadius: "12px",
+                      display: "grid",
+                      placeItems: "center",
+                      background: `${hazard.color}18`,
+                      color: hazard.color,
+                    }}
+                  >
+                    <Icon size={23} />
+                  </div>
+
+                  <span
+                    style={{
+                      fontSize: "11px",
+                      fontWeight: 700,
+                      letterSpacing: "0.08em",
+                      padding: "6px 9px",
+                      borderRadius: "999px",
+                      background: active ? "#12351f" : "#252b33",
+                      color: active ? "#6ee7a0" : "#aeb9c7",
+                    }}
+                  >
+                    {active ? "● ONLINE" : "○ WAITING"}
+                  </span>
+                </div>
+
+                <div style={{ fontSize: "19px", fontWeight: 800 }}>
+                  {hazard.name}
+                </div>
+
+                <div
+                  style={{
+                    marginTop: "3px",
+                    fontSize: "12px",
+                    letterSpacing: "0.1em",
+                    opacity: 0.65,
+                  }}
+                >
+                  NODE {String(index + 1).padStart(2, "0")} • {hazard.node}
+                </div>
+
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gap: "10px",
+                    marginTop: "18px",
+                  }}
+                >
+                  <div>
+                    <small>RISK</small>
+                    <div style={{ fontSize: "22px", fontWeight: 800 }}>
+                      {active ? `${risk.toFixed(1)}%` : "--"}
+                    </div>
+                  </div>
+
+                  <div>
+                    <small>STATUS</small>
+                    <div style={{ fontSize: "15px", fontWeight: 800 }}>
+                      {active ? severity : "WAITING"}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ marginTop: "14px" }}>
+                  <div
+                    style={{
+                      height: "5px",
+                      background: "#172536",
+                      borderRadius: "999px",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <span
+                      style={{
+                        display: "block",
+                        height: "100%",
+                        width: `${Math.min(risk, 100)}%`,
+                        background: hazard.color,
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    marginTop: "13px",
+                    fontSize: "11px",
+                    opacity: 0.7,
+                  }}
+                >
+                  <span>EDGE AI: READY</span>
+                  <span>VIEW NODE →</span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      <div className="system-banner" style={{ marginTop: "24px" }}>
+        <div>
+          <span className="live-dot"></span>
+          EDGE-FIRST ARCHITECTURE
+        </div>
+        <p>
+          Nodes can evaluate local conditions first; cloud connectivity is used
+          for synchronization, analytics and the central dashboard.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================
    HAZARD PAGE
 ========================================================= */
 
 function HazardPage({
   hazard,
   event,
+  sensorReading,
   events,
   onBack,
   onRefresh,
@@ -679,7 +1014,28 @@ function HazardPage({
   const Icon = hazard.icon;
 
   const risk = Number(event?.risk_score || 0);
-  const sensorData = event?.sensor_readings || {};
+
+  // Keep the last valid telemetry values and support both the
+  // full water-quality format and the current ESP8266 format.
+  const rawSensorData =
+    sensorReading?.measurements ||
+    event?.sensor_readings ||
+    {};
+
+  const sensorData = {
+    ...rawSensorData,
+
+    // Current ESP8266 water node fields
+    turbidity:
+      rawSensorData.turbidity ??
+      rawSensorData.turbidity_raw ??
+      null,
+
+    ph:
+      rawSensorData.ph ??
+      rawSensorData.ph_value ??
+      null,
+  };
 
   const loadPrediction = async () => {
     if (!event?.id) return;
@@ -691,7 +1047,7 @@ function HazardPage({
         `${API}/prediction/${event.id}`
       );
 
-      setPrediction(response.data || null);
+      setPrediction(response.data?.prediction || response.data);
     } catch (error) {
       console.error("Prediction error:", error);
     } finally {
@@ -1039,9 +1395,163 @@ function MapPage({ hazards, latestEvents, onOpenHazard }) {
    EVENTS
 ========================================================= */
 
+function LegacyEventsPage({ events, onOpenHazard }) {
+  return (
+    <div className="page">
+      <PageTitle
+        eyebrow="EVENT INTELLIGENCE"
+        title="ENVIRONMENTAL EVENTS"
+        subtitle="Historical and active events detected across the ENVIGUARD sensor network."
+      />
+
+      <div className="panel table-panel">
+        <div className="table-head">
+          <span>EVENT</span>
+          <span>NODE</span>
+          <span>HAZARD</span>
+          <span>RISK</span>
+          <span>SEVERITY</span>
+          <span>STATUS</span>
+          <span></span>
+        </div>
+
+        {events.length === 0 ? (
+          <EmptyState
+            icon={<Activity />}
+            text="No environmental events available."
+          />
+        ) : (
+          events
+            .slice()
+            .reverse()
+            .map((event, index) => (
+              <div className="table-row" key={event.id || index}>
+                <span>#{event.id}</span>
+
+                <span className="mono">
+                  {event.node_id}
+                </span>
+
+                <span>
+                  {formatName(event.hazard)}
+                </span>
+
+                <strong>
+                  {Number(event.risk_score || 0).toFixed(1)}%
+                </strong>
+
+                <span
+                  className={`table-severity ${getRiskClass(
+                    Number(event.risk_score || 0)
+                  )}`}
+                >
+                  {event.severity ||
+                    getSeverity(Number(event.risk_score || 0))}
+                </span>
+
+                <span className="status-tag">
+                  {event.status || "ACTIVE"}
+                </span>
+
+                <button
+                  className="icon-btn"
+                  onClick={() => {
+                    const hazard = HAZARDS.find(
+                      (item) => item.node === event.node_id
+                    );
+
+                    if (hazard) onOpenHazard(hazard);
+                  }}
+                >
+                  <ChevronRight size={17} />
+                </button>
+              </div>
+            ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* =========================================================
    AI ANALYST
 ========================================================= */
+
+function AnalystPage({ hazards, latestEvents }) {
+  return (
+    <div className="page">
+      <PageTitle
+        eyebrow="ENVIGUARD ARTIFICIAL INTELLIGENCE"
+        title="AI ENVIRONMENTAL ANALYST"
+        subtitle="Cross-hazard intelligence generated from sensor trends, risk scores and prediction signals."
+      />
+
+      <div className="analyst-hero">
+        <div className="analyst-icon">
+          <Brain size={38} />
+        </div>
+
+        <div>
+          <div className="eyebrow">
+            <span></span>
+            LIVE ENVIRONMENTAL REASONING
+          </div>
+
+          <h2>Threat intelligence across seven hazards.</h2>
+
+          <p>
+            ENVIGUARD continuously evaluates environmental conditions
+            and identifies emerging high-risk situations.
+          </p>
+        </div>
+      </div>
+
+      <div className="analyst-grid">
+        {hazards.map((hazard) => {
+          const event = latestEvents[hazard.node];
+          const risk = Number(event?.risk_score || 0);
+
+          return (
+            <div
+              className="analysis-card"
+              key={hazard.key}
+              style={{ "--hazard-color": hazard.color }}
+            >
+              <div className="analysis-title">
+                <hazard.icon size={20} />
+                <span>{hazard.name}</span>
+              </div>
+
+              <div className="analysis-risk">
+                {event ? `${risk.toFixed(1)}%` : "--"}
+              </div>
+
+              <div className="analysis-status">
+                {event
+                  ? event.prediction ||
+                    "Current environmental conditions are being monitored for emerging risk."
+                  : "Waiting for sensor data."}
+              </div>
+
+              <div className="analysis-footer">
+                <span>
+                  CONFIDENCE:{" "}
+                  {event?.confidence !== undefined
+                    ? `${event.confidence}%`
+                    : "--"}
+                </span>
+
+                <span>
+                  TREND: {event?.trend || "--"}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 /* =========================================================
    ANALYTICS

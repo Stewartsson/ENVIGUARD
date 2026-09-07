@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import "./AnalystPage.css";
 
-const API = "http://10.84.74.179:8000/api";
+const API = "http://127.0.0.1:8000/api";
 
 const HAZARDS = {
   flood: {
@@ -11,7 +11,7 @@ const HAZARDS = {
     description: "Water level and rainfall based flood prediction",
     actions: [
       "Activate flood warning",
-      "Monitor water level continuously",
+      "Monitor water level continuously", 
       "Prepare drainage / pumping system",
       "Alert nearby personnel",
     ],

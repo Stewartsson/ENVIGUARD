@@ -33,22 +33,21 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
 
+    # Local Vite frontend origins
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-
-        # Your frontend is currently running on 5174
         "http://localhost:5174",
         "http://127.0.0.1:5174",
-
         "http://10.84.74.179:5173",
         "http://10.84.74.179:5174",
     ],
 
+    # Also accept another local development port if Vite changes it.
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|10\.84\.74\.179)(:\d+)?$",
+
     allow_credentials=True,
-
     allow_methods=["*"],
-
     allow_headers=["*"],
 )
 
@@ -768,6 +767,14 @@ def root():
 # ============================================================
 # HEALTH
 # ============================================================
+
+@app.get("/api/cors-test")
+def cors_test():
+    return {
+        "status": "ok",
+        "cors": "enabled",
+    }
+
 
 @app.get("/api/health")
 def health():

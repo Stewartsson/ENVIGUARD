@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import "./AnalystPage.css";
-
-const API = "http://127.0.0.1:8000/api";
+import API from "./api";
 
 const HAZARDS = {
   flood: {

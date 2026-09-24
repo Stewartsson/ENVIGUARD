@@ -11,11 +11,12 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "./LiveMap.css";
 
+
 // ======================================================
 // ENVIGUARD BACKEND
 // ======================================================
 
-const API = "http://127.0.0.1:8000/api";
+import API from "./api";
 
 // ======================================================
 // LEAFLET ICON FIX

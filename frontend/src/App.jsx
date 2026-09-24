@@ -37,10 +37,10 @@ import {
 } from "recharts";
 import LiveMap from "./LiveMap";
 import EventsPageLive from "./EventsPage";
+import API from "./api";
+import AnalystPageLive from "./AnalystPage";
 import "./App.css";
 
-
-const API = "https://enviguard-backend.onrender.com/api";
 
 const HAZARDS = [
   {

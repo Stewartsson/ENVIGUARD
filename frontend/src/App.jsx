@@ -155,6 +155,8 @@ function App() {
   const loadData = async () => {
     setLoading(true);
 
+    let apiReachable = false;
+
     // Keep the three data streams independent. A temporary failure in
     // events/alerts must never erase the last valid sensor reading.
     try {
@@ -200,7 +202,7 @@ function App() {
         });
       }
 
-      setBackendOnline(true);
+      apiReachable = true;
     } catch (error) {
       console.error("Sensor API error:", error);
       // Do not clear sensorData/lastSensorData.

@@ -1,5 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
-
+import { useEffect, useMemo, useState } from "react";
 import {
   MapContainer,
   TileLayer,
@@ -8,17 +7,20 @@ import {
   Circle,
   useMap,
 } from "react-leaflet";
-
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-
 import "./LiveMap.css";
+
+
+// ======================================================
+// ENVIGUARD BACKEND
+// ======================================================
+
 import API from "./api";
 
-
-// ============================================================
+// ======================================================
 // LEAFLET ICON FIX
-// ============================================================
+// ======================================================
 
 delete L.Icon.Default.prototype._getIconUrl;
 
@@ -33,277 +35,413 @@ L.Icon.Default.mergeOptions({
     "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
 });
 
+// ======================================================
+// HAZARD CONFIGURATION
+// ======================================================
 
-// ============================================================
-// DEFAULT MAP LOCATION
-// ============================================================
+const HAZARDS = {
+  flood: {
+    name: "Flood",
+    node: "RIVER_01",
+    icon: "🌊",
+    description:
+      "River level, rainfall and soil saturation monitoring",
+  },
 
-const DEFAULT_CENTER = [11.0168, 76.9558];
+  forest_fire: {
+    name: "Forest Fire",
+    node: "FOREST_01",
+    icon: "🔥",
+    description:
+      "Forest temperature, smoke and gas monitoring",
+  },
 
+  air_pollution: {
+    name: "Air Pollution",
+    node: "CITY_01",
+    icon: "🏭",
+    description:
+      "Urban air quality and pollutant monitoring",
+  },
 
-// ============================================================
-// HAZARD COLORS
-// ============================================================
+  extreme_heat: {
+    name: "Extreme Heat",
+    node: "HEAT_01",
+    icon: "🌡️",
+    description:
+      "Temperature, humidity and heat-index monitoring",
+  },
 
-const HAZARD_COLORS = {
-  flood: "#00d9ff",
-  water_quality: "#22d3ee",
-  landslide: "#c084fc",
-  extreme_heat: "#ff8a00",
-  air_pollution: "#ffd000",
-  forest_fire: "#ff5533",
-  chemical_leak: "#c084fc",
-  default: "#00d9ff",
+  landslide: {
+    name: "Landslide",
+    node: "HILL_01",
+    icon: "⛰️",
+    description:
+      "Slope stability, vibration, tilt and soil monitoring",
+  },
+
+  chemical_leak: {
+    name: "Chemical Leak",
+    node: "INDUSTRY_01",
+    icon: "☣️",
+    description:
+      "Industrial gas and chemical exposure monitoring",
+  },
+
+  water_quality: {
+    name: "Water Quality",
+    node: "WATER_01",
+    icon: "💧",
+    description:
+      "Water contamination and quality monitoring",
+  },
 };
 
+// ======================================================
+// DEFAULT NODE LOCATIONS
+// ======================================================
 
-// ============================================================
+const NODE_LOCATIONS = {
+  RIVER_01: [11.0168, 76.9558],
+  FOREST_01: [11.05, 76.93],
+  CITY_01: [11.0, 76.96],
+  HEAT_01: [11.02, 76.97],
+  HILL_01: [11.0665, 76.9625],
+  INDUSTRY_01: [11.03, 77.0],
+  WATER_01: [10.98, 76.95],
+};
+
+// ======================================================
 // HELPERS
-// ============================================================
+// ======================================================
 
-function getHazardColor(hazard) {
-  if (!hazard) {
-    return HAZARD_COLORS.default;
-  }
+function getRiskColor(risk) {
+  const value = Number(risk || 0);
 
-  return HAZARD_COLORS[hazard] || HAZARD_COLORS.default;
+  if (value >= 80) return "#ff3b4d";
+  if (value >= 60) return "#ff9f1c";
+  if (value >= 40) return "#ffd166";
+
+  return "#22c55e";
 }
 
+function getRiskLevel(risk) {
+  const value = Number(risk || 0);
 
-function formatHazard(hazard) {
-  if (!hazard) {
-    return "Unknown";
-  }
+  if (value >= 80) return "CRITICAL";
+  if (value >= 60) return "HIGH";
+  if (value >= 40) return "MEDIUM";
 
-  return hazard
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+  return "LOW";
 }
 
-
-function formatSeverity(severity) {
-  if (!severity) {
-    return "UNKNOWN";
-  }
-
-  return String(severity).toUpperCase();
+function getHazardConfig(hazard) {
+  return (
+    HAZARDS[hazard] || {
+      name: hazard || "Unknown Hazard",
+      icon: "⚠️",
+      description: "Environmental monitoring node",
+    }
+  );
 }
 
+function getCoordinates(event) {
+  const fallback =
+    NODE_LOCATIONS[event?.node_id];
 
-function formatTime(time) {
-  if (!time) {
-    return "—";
+  const latitude =
+    event?.location?.latitude ??
+    event?.latitude ??
+    fallback?.[0];
+
+  const longitude =
+    event?.location?.longitude ??
+    event?.longitude ??
+    fallback?.[1];
+
+  if (
+    latitude === null ||
+    latitude === undefined ||
+    longitude === null ||
+    longitude === undefined
+  ) {
+    return null;
   }
 
-  try {
-    return new Date(time).toLocaleString();
-  } catch {
-    return time;
+  const lat = Number(latitude);
+  const lng = Number(longitude);
+
+  if (
+    Number.isNaN(lat) ||
+    Number.isNaN(lng)
+  ) {
+    return null;
   }
+
+  return [lat, lng];
 }
 
+// ======================================================
+// CUSTOM HAZARD MARKER
+// ======================================================
 
-// ============================================================
-// MAP AUTO FIT COMPONENT
-// ============================================================
+function createHazardIcon(hazard, risk) {
+  const config = getHazardConfig(hazard);
+  const color = getRiskColor(risk);
 
-function MapUpdater({ points }) {
+  return L.divIcon({
+    className:
+      "enviguard-marker-wrapper",
+
+    html: `
+      <div
+        class="enviguard-marker"
+        style="
+          --marker-color:${color};
+          border-color:${color};
+          box-shadow:
+            0 0 0 5px ${color}22,
+            0 0 25px ${color}88;
+        "
+      >
+        <span>${config.icon}</span>
+      </div>
+    `,
+
+    iconSize: [48, 48],
+    iconAnchor: [24, 24],
+    popupAnchor: [0, -24],
+  });
+}
+
+// ======================================================
+// MAP AUTO FIT
+// ======================================================
+
+function MapViewUpdater({ events }) {
   const map = useMap();
 
   useEffect(() => {
-    if (!points || points.length === 0) {
-      return;
-    }
+    if (!events.length) return;
 
-    const validPoints = points
-      .filter(
-        (point) =>
-          Number.isFinite(point.latitude) &&
-          Number.isFinite(point.longitude)
+    const points = events
+      .map((event) =>
+        getCoordinates(event)
       )
-      .map((point) => [point.latitude, point.longitude]);
+      .filter(Boolean);
 
-    if (validPoints.length === 0) {
-      return;
-    }
+    if (points.length === 0) return;
 
-    if (validPoints.length === 1) {
-      map.setView(validPoints[0], 10);
-      return;
-    }
-
-    const bounds = L.latLngBounds(validPoints);
-
-    map.fitBounds(bounds, {
+    map.fitBounds(points, {
       padding: [40, 40],
       maxZoom: 12,
     });
-  }, [points, map]);
+  }, [events, map]);
 
   return null;
 }
 
+// ======================================================
+// MAIN COMPONENT
+// ======================================================
 
-// ============================================================
-// LIVE MAP COMPONENT
-// ============================================================
-
-function LiveMap() {
+export default function LiveMap() {
   const [events, setEvents] = useState([]);
+  const [loading, setLoading] =
+    useState(true);
 
-  const [loading, setLoading] = useState(true);
+  const [lastUpdated, setLastUpdated] =
+    useState(null);
 
-  const [backendOnline, setBackendOnline] = useState(false);
+  const [error, setError] =
+    useState("");
 
-  const [error, setError] = useState("");
+  const [selectedNode, setSelectedNode] =
+    useState(null);
 
-  const [lastUpdated, setLastUpdated] = useState(null);
+  // ====================================================
+  // FETCH EVENTS
+  // ====================================================
 
-
-  // ==========================================================
-  // LOAD EVENTS
-  // ==========================================================
-
-  const loadEvents = async () => {
+  const fetchEvents = async () => {
     try {
       setError("");
 
-      const response = await fetch(`${API}/events?t=${Date.now()}`, {
-        method: "GET",
-
-        headers: {
-          Accept: "application/json",
-          "Cache-Control": "no-cache",
-        },
-      });
+      const response = await fetch(
+        `${API}/events`,
+        {
+          method: "GET",
+          headers: {
+            Accept: "application/json",
+          },
+        }
+      );
 
       if (!response.ok) {
         throw new Error(
-          `Backend returned HTTP ${response.status}`
+          `HTTP ${response.status}`
         );
       }
 
-      const result = await response.json();
+      const result =
+        await response.json();
 
-      const incomingEvents = Array.isArray(result)
-        ? result
-        : Array.isArray(result?.data)
-        ? result.data
-        : [];
+      let received = [];
 
-      setEvents(incomingEvents);
+      if (Array.isArray(result)) {
+        received = result;
+      } else if (
+        Array.isArray(result?.data)
+      ) {
+        received = result.data;
+      } else if (
+        Array.isArray(result?.events)
+      ) {
+        received = result.events;
+      }
 
-      setBackendOnline(true);
+      // -----------------------------------------------
+      // Keep latest event for each node
+      // -----------------------------------------------
 
-      setLastUpdated(new Date());
+      const latestByNode = {};
 
-    } catch (err) {
-      console.error("ENVIGUARD LiveMap API error:", err);
+      received.forEach((event) => {
+        const node =
+          event?.node_id;
 
-      setBackendOnline(false);
+        if (!node) return;
 
-      setError(
-        "Unable to connect to the ENVIGUARD backend."
+        const current =
+          latestByNode[node];
+
+        const currentTime = new Date(
+          current?.last_updated ??
+            current?.start_time ??
+            0
+        ).getTime();
+
+        const newTime = new Date(
+          event?.last_updated ??
+            event?.start_time ??
+            0
+        ).getTime();
+
+        if (
+          !current ||
+          newTime >= currentTime
+        ) {
+          latestByNode[node] = event;
+        }
+      });
+
+      setEvents(
+        Object.values(
+          latestByNode
+        )
       );
 
-      // IMPORTANT:
-      // Do not erase the previous events if the backend
-      // temporarily fails.
+      setLastUpdated(
+        new Date()
+      );
+    } catch (err) {
+      console.error(
+        "ENVIGUARD LiveMap API error:",
+        err
+      );
+
+      setError(
+        "Backend unavailable"
+      );
     } finally {
       setLoading(false);
     }
   };
 
-
-  // ==========================================================
+  // ====================================================
   // INITIAL LOAD + AUTO REFRESH
-  // ==========================================================
+  // ====================================================
 
   useEffect(() => {
-    loadEvents();
+    fetchEvents();
 
-    const interval = setInterval(() => {
-      loadEvents();
-    }, 5000);
+    const interval =
+      setInterval(
+        fetchEvents,
+        5000
+      );
 
-    return () => {
+    return () =>
       clearInterval(interval);
-    };
   }, []);
 
-
-  // ==========================================================
-  // PREPARE MAP POINTS
-  // ==========================================================
-
-  const mapPoints = useMemo(() => {
-    return events
-      .map((event) => {
-        const latitude = Number(event?.latitude);
-
-        const longitude = Number(event?.longitude);
-
-        return {
-          ...event,
-
-          latitude,
-
-          longitude,
-        };
-      })
-      .filter(
-        (event) =>
-          Number.isFinite(event.latitude) &&
-          Number.isFinite(event.longitude)
-      );
-  }, [events]);
-
-
-  // ==========================================================
+  // ====================================================
   // STATISTICS
-  // ==========================================================
+  // ====================================================
 
-  const activeNodes = useMemo(() => {
-    const uniqueNodes = new Set();
+  const criticalCount =
+    useMemo(
+      () =>
+        events.filter(
+          (event) =>
+            String(
+              event?.severity || ""
+            ).toUpperCase() ===
+            "CRITICAL"
+        ).length,
+      [events]
+    );
 
-    events.forEach((event) => {
-      if (event?.node_id) {
-        uniqueNodes.add(event.node_id);
-      }
-    });
+  const highCount =
+    useMemo(
+      () =>
+        events.filter(
+          (event) => {
+            const risk =
+              Number(
+                event?.risk_score || 0
+              );
 
-    return uniqueNodes.size;
-  }, [events]);
+            return (
+              risk >= 60 &&
+              risk < 80
+            );
+          }
+        ).length,
+      [events]
+    );
 
+  const activeHazards =
+    useMemo(
+      () =>
+        new Set(
+          events.map(
+            (event) =>
+              event?.hazard
+          )
+        ).size,
+      [events]
+    );
 
-  const criticalCount = useMemo(() => {
-    return events.filter(
-      (event) =>
-        String(event?.severity || "").toUpperCase() ===
-        "CRITICAL"
-    ).length;
-  }, [events]);
+  // ====================================================
+  // MAP CENTER
+  // ====================================================
 
+  const center = [
+    11.0168,
+    76.9558,
+  ];
 
-  const highRiskCount = useMemo(() => {
-    return events.filter(
-      (event) =>
-        String(event?.severity || "").toUpperCase() ===
-        "HIGH"
-    ).length;
-  }, [events]);
-
-
-  // ==========================================================
+  // ====================================================
   // RENDER
-  // ==========================================================
+  // ====================================================
 
   return (
     <div className="live-map-page">
 
-      {/* ====================================================
-          PAGE HEADER
-      ==================================================== */}
+      {/* ================================================
+          HEADER
+      ================================================= */}
 
       <div className="live-map-header">
 
@@ -318,56 +456,58 @@ function LiveMap() {
           </h1>
 
           <p>
-            Real-time visualization of the ENVIGUARD
-            multi-hazard sensor network.
+            Real-time visualization of
+            the ENVIGUARD multi-hazard
+            sensor network.
           </p>
 
         </div>
 
+        <div className="map-status">
 
-        <div
-          className={`backend-status ${
-            backendOnline ? "online" : "offline"
-          }`}
-        >
+          <span
+            className="status-dot"
+            style={{
+              background:
+                error
+                  ? "#ef4444"
+                  : "#22c55e",
+            }}
+          ></span>
 
-          <span className="status-dot"></span>
-
-          {backendOnline
-            ? "BACKEND ONLINE"
-            : "BACKEND OFFLINE"}
+          {error
+            ? "BACKEND OFFLINE"
+            : "LIVE NETWORK"}
 
         </div>
 
       </div>
 
+      {/* ================================================
+          TOP STATISTICS
+      ================================================= */}
 
-      {/* ====================================================
-          SUMMARY CARDS
-      ==================================================== */}
+      <div className="map-stat-grid">
 
-      <div className="live-map-stats">
+        <div className="map-stat-card">
 
-        <div className="live-map-stat-card">
-
-          <span className="stat-label">
+          <span className="map-stat-label">
             ACTIVE NODES
           </span>
 
           <strong>
-            {activeNodes}
+            {events.length}
           </strong>
 
           <small>
-            Live environmental nodes
+            {activeHazards}/7 hazards active
           </small>
 
         </div>
 
+        <div className="map-stat-card">
 
-        <div className="live-map-stat-card">
-
-          <span className="stat-label">
+          <span className="map-stat-label">
             CRITICAL
           </span>
 
@@ -381,15 +521,14 @@ function LiveMap() {
 
         </div>
 
+        <div className="map-stat-card">
 
-        <div className="live-map-stat-card">
-
-          <span className="stat-label">
+          <span className="map-stat-label">
             HIGH RISK
           </span>
 
           <strong className="high-value">
-            {highRiskCount}
+            {highCount}
           </strong>
 
           <small>
@@ -398,45 +537,40 @@ function LiveMap() {
 
         </div>
 
+        <div className="map-stat-card">
 
-        <div className="live-map-stat-card">
-
-          <span className="stat-label">
+          <span className="map-stat-label">
             LAST UPDATE
           </span>
 
-          <strong className="update-value">
-
+          <strong>
             {lastUpdated
               ? lastUpdated.toLocaleTimeString()
-              : "—"}
-
+              : "--:--:--"}
           </strong>
 
           <small>
-            {backendOnline
-              ? "Live backend data"
-              : "Backend unavailable"}
+            {error ||
+              "Live sensor stream"}
           </small>
 
         </div>
 
       </div>
 
+      {/* ================================================
+          MAP + NODE PANEL
+      ================================================= */}
 
-      {/* ====================================================
-          MAIN CONTENT
-      ==================================================== */}
+      <div className="map-layout">
 
-      <div className="live-map-content">
-
-        {/* ==================================================
+        {/* ============================================
             MAP
-        ================================================== */}
+        ============================================= */}
 
-        <section className="map-panel">
+        <div className="map-card">
 
-          <div className="map-panel-header">
+          <div className="map-card-header">
 
             <div>
 
@@ -445,224 +579,352 @@ function LiveMap() {
               </h2>
 
               <p>
-                Live geographic distribution of
-                monitored hazards
+                Live geographic distribution
+                of monitored hazards
               </p>
 
             </div>
 
-
             <button
-              type="button"
-              className="refresh-button"
-              onClick={loadEvents}
-              disabled={loading}
+              className="map-refresh"
+              onClick={fetchEvents}
             >
               ↻ Refresh
             </button>
 
           </div>
 
-
-          <div className="map-wrapper">
+          <div className="map-container">
 
             <MapContainer
-              center={DEFAULT_CENTER}
-              zoom={8}
+              center={center}
+              zoom={11}
               scrollWheelZoom={true}
-              className="environment-map"
+              className="leaflet-map"
             >
 
               <TileLayer
-                attribution='&copy; OpenStreetMap contributors'
+                attribution="&copy; OpenStreetMap contributors"
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
               />
 
+              <MapViewUpdater
+                events={events}
+              />
 
-              <MapUpdater points={mapPoints} />
+              {/* ========================================
+                  HAZARD MARKERS
+              ======================================== */}
 
+              {events.map(
+                (event) => {
 
-              {mapPoints.map((event, index) => {
+                  const coordinates =
+                    getCoordinates(
+                      event
+                    );
 
-                const color = getHazardColor(
-                  event.hazard
-                );
+                  if (
+                    !coordinates
+                  ) {
+                    return null;
+                  }
 
-                const position = [
-                  event.latitude,
-                  event.longitude,
-                ];
+                  const hazard =
+                    event?.hazard;
 
+                  const config =
+                    getHazardConfig(
+                      hazard
+                    );
 
-                return (
-                  <React.Fragment
-                    key={
-                      event.id ??
-                      `${event.node_id}-${index}`
-                    }
-                  >
+                  const risk =
+                    Number(
+                      event?.risk_score ||
+                        0
+                    );
 
-                    <Circle
-                      center={position}
-                      radius={2500}
-                      pathOptions={{
-                        color,
-                        fillColor: color,
-                        fillOpacity: 0.12,
-                        weight: 1,
-                      }}
-                    />
+                  const riskLevel =
+                    getRiskLevel(
+                      risk
+                    );
 
+                  const prediction =
+                    event?.prediction;
 
-                    <Marker position={position}>
+                  return (
+                    <div
+                      key={
+                        event?.node_id ||
+                        event?.id
+                      }
+                    >
 
-                      <Popup>
+                      {/* MARKER */}
 
-                        <div
-                          style={{
-                            minWidth: "220px",
-                            fontFamily:
-                              "Arial, sans-serif",
-                          }}
-                        >
+                      <Marker
+                        position={
+                          coordinates
+                        }
+                        icon={createHazardIcon(
+                          hazard,
+                          risk
+                        )}
+                        eventHandlers={{
+                          click: () =>
+                            setSelectedNode(
+                              event
+                            ),
+                        }}
+                      >
 
-                          <h3
-                            style={{
-                              marginTop: 0,
-                              marginBottom: "8px",
-                            }}
-                          >
-                            {event.node_id ||
-                              "Unknown Node"}
-                          </h3>
+                        {/* =================================
+                            POPUP
+                        ================================== */}
 
+                        <Popup>
 
-                          <p>
-                            <strong>
-                              Hazard:
-                            </strong>{" "}
-                            {formatHazard(
-                              event.hazard
+                          <div className="hazard-popup">
+
+                            <div className="popup-icon">
+                              {
+                                config.icon
+                              }
+                            </div>
+
+                            <h3>
+                              {
+                                config.name
+                              }
+                            </h3>
+
+                            <p className="popup-node">
+                              Node:{" "}
+                              <strong>
+                                {
+                                  event?.node_id ||
+                                  "--"
+                                }
+                              </strong>
+                            </p>
+
+                            <p className="popup-description">
+                              {
+                                config.description
+                              }
+                            </p>
+
+                            {/* RISK */}
+
+                            <div className="popup-risk">
+
+                              <span>
+                                RISK
+                              </span>
+
+                              <strong
+                                style={{
+                                  color:
+                                    getRiskColor(
+                                      risk
+                                    ),
+                                }}
+                              >
+                                {risk.toFixed(
+                                  1
+                                )}
+                                %
+                              </strong>
+
+                            </div>
+
+                            {/* SEVERITY */}
+
+                            <div className="popup-row">
+
+                              <span>
+                                Severity
+                              </span>
+
+                              <strong>
+                                {
+                                  event?.severity ||
+                                  riskLevel
+                                }
+                              </strong>
+
+                            </div>
+
+                            {/* CONFIDENCE */}
+
+                            <div className="popup-row">
+
+                              <span>
+                                Confidence
+                              </span>
+
+                              <strong>
+                                {event?.confidence !=
+                                null
+                                  ? `${event.confidence}%`
+                                  : "--"}
+                              </strong>
+
+                            </div>
+
+                            {/* TREND */}
+
+                            <div className="popup-row">
+
+                              <span>
+                                Trend
+                              </span>
+
+                              <strong>
+                                {
+                                  event?.trend ||
+                                  "Monitoring"
+                                }
+                              </strong>
+
+                            </div>
+
+                            {/* STATUS */}
+
+                            <div className="popup-row">
+
+                              <span>
+                                Status
+                              </span>
+
+                              <strong>
+                                {
+                                  event?.status ||
+                                  "ACTIVE"
+                                }
+                              </strong>
+
+                            </div>
+
+                            {/* PREDICTION */}
+
+                            {prediction && (
+                              <div className="popup-prediction">
+
+                                <span>
+                                  🤖 AI PREDICTION
+                                </span>
+
+                                <p>
+                                  {
+                                    prediction
+                                  }
+                                </p>
+
+                              </div>
                             )}
-                          </p>
 
+                            {/* LOCATION */}
 
-                          <p>
-                            <strong>
-                              Severity:
-                            </strong>{" "}
-                            {formatSeverity(
-                              event.severity
-                            )}
-                          </p>
+                            <div className="popup-row">
 
+                              <span>
+                                Location
+                              </span>
 
-                          <p>
-                            <strong>
-                              Risk:
-                            </strong>{" "}
-                            {event.risk_score ?? "—"}
-                          </p>
+                              <strong>
+                                {coordinates[0].toFixed(
+                                  4
+                                )}
+                                ,{" "}
+                                {coordinates[1].toFixed(
+                                  4
+                                )}
+                              </strong>
 
+                            </div>
 
-                          <p>
-                            <strong>
-                              Confidence:
-                            </strong>{" "}
-                            {event.confidence ?? "—"}
-                            %
-                          </p>
+                          </div>
 
+                        </Popup>
 
-                          <p>
-                            <strong>
-                              Status:
-                            </strong>{" "}
-                            {event.status || "—"}
-                          </p>
+                      </Marker>
 
+                      {/* RISK RADIUS */}
 
-                          <p>
-                            <strong>
-                              Updated:
-                            </strong>{" "}
-                            {formatTime(
-                              event.last_updated
-                            )}
-                          </p>
+                      <Circle
+                        center={
+                          coordinates
+                        }
+                        radius={
+                          1000 +
+                          risk * 8
+                        }
+                        pathOptions={{
+                          color:
+                            getRiskColor(
+                              risk
+                            ),
+                          fillColor:
+                            getRiskColor(
+                              risk
+                            ),
+                          fillOpacity:
+                            0.07,
+                          weight: 1,
+                        }}
+                      />
 
-                        </div>
-
-                      </Popup>
-
-                    </Marker>
-
-                  </React.Fragment>
-                );
-              })}
+                    </div>
+                  );
+                }
+              )}
 
             </MapContainer>
 
+            {/* ==========================================
+                MAP LEGEND
+            =========================================== */}
 
-            {/* ==============================================
-                NO COORDINATES MESSAGE
-            ============================================== */}
+            <div className="map-legend">
 
-            {!loading &&
-              backendOnline &&
-              events.length > 0 &&
-              mapPoints.length === 0 && (
-
-                <div className="map-overlay-message">
-
-                  <div>
-                    📍
-                  </div>
-
-                  <strong>
-                    Sensor events received
-                  </strong>
-
-                  <span>
-                    Location coordinates are not
-                    available for these events yet.
-                  </span>
-
-                </div>
-              )}
-
-
-            {/* ==============================================
-                LOADING
-            ============================================== */}
-
-            {loading && (
-
-              <div className="map-overlay-message">
-
-                <div>
-                  ⟳
-                </div>
-
-                <strong>
-                  Loading environmental data...
-                </strong>
-
+              <div className="legend-title">
+                RISK LEVEL
               </div>
-            )}
+
+              <div>
+                <span className="legend-dot critical"></span>
+                Critical ≥ 80%
+              </div>
+
+              <div>
+                <span className="legend-dot high"></span>
+                High ≥ 60%
+              </div>
+
+              <div>
+                <span className="legend-dot medium"></span>
+                Medium ≥ 40%
+              </div>
+
+              <div>
+                <span className="legend-dot low"></span>
+                Low &lt; 40%
+              </div>
+
+            </div>
 
           </div>
 
-        </section>
+        </div>
 
+        {/* ============================================
+            RIGHT NODE PANEL
+        ============================================= */}
 
-        {/* ==================================================
-            ACTIVE SENSOR NODES
-        ================================================== */}
+        <div className="node-panel">
 
-        <section className="sensor-panel">
-
-          <div className="sensor-panel-header">
+          <div className="panel-heading">
 
             <div>
 
@@ -670,164 +932,326 @@ function LiveMap() {
                 Active Sensor Nodes
               </h2>
 
-              <p>
+              <small>
                 Real-time backend events
-              </p>
+              </small>
 
             </div>
 
-
-            <span className="live-indicator">
-
-              <span className="status-dot"></span>
-
-              {activeNodes} LIVE
-
+            <span>
+              {events.length} LIVE
             </span>
 
           </div>
 
+          <div className="node-list">
 
-          <div className="sensor-list">
+            {/* LOADING */}
 
-            {events.length === 0 && !loading && (
+            {loading && (
+              <div className="empty-node">
+                <strong>
+                  Loading sensor network...
+                </strong>
 
-              <div className="empty-state">
-
-                {!backendOnline ? (
-                  <>
-                    <div className="empty-icon">
-                      ⚠
-                    </div>
-
-                    <strong>
-                      Backend unavailable
-                    </strong>
-
-                    <span>
-                      Check that the ENVIGUARD
-                      FastAPI backend is running.
-                    </span>
-
-                    <button
-                      type="button"
-                      onClick={loadEvents}
-                    >
-                      Try Again
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <div className="empty-icon">
-                      ◌
-                    </div>
-
-                    <strong>
-                      No active events
-                    </strong>
-
-                    <span>
-                      Waiting for environmental
-                      sensor data.
-                    </span>
-                  </>
-                )}
-
+                <span>
+                  Connecting to ENVIGUARD
+                  backend
+                </span>
               </div>
             )}
 
+            {/* ERROR */}
 
-            {events.map((event, index) => {
+            {!loading &&
+              error && (
+                <div className="empty-node">
 
-              const color = getHazardColor(
-                event.hazard
-              );
+                  <strong>
+                    ⚠️ Backend unavailable
+                  </strong>
 
+                  <span>
+                    Check that FastAPI is
+                    running on port 8000.
+                  </span>
 
-              return (
-                <div
-                  className="sensor-card"
-                  key={
-                    event.id ??
-                    `${event.node_id}-${index}`
-                  }
-                >
-
-                  <div
-                    className="sensor-color"
-                    style={{
-                      backgroundColor: color,
-                      boxShadow:
-                        `0 0 12px ${color}`,
-                    }}
-                  ></div>
-
-
-                  <div className="sensor-info">
-
-                    <strong>
-                      {event.node_id ||
-                        "Unknown Node"}
-                    </strong>
-
-                    <span>
-                      {formatHazard(
-                        event.hazard
-                      )}
-                    </span>
-
-                  </div>
-
-
-                  <div
-                    className="sensor-risk"
-                    style={{
-                      color,
-                    }}
+                  <button
+                    className="map-refresh"
+                    onClick={
+                      fetchEvents
+                    }
                   >
-                    {event.risk_score ?? "—"}
-                  </div>
+                    Try Again
+                  </button>
 
                 </div>
-              );
-            })}
+              )}
+
+            {/* NO EVENTS */}
+
+            {!loading &&
+              !error &&
+              events.length === 0 && (
+                <div className="empty-node">
+
+                  <strong>
+                    No sensor events
+                  </strong>
+
+                  <span>
+                    Waiting for ENVIGUARD
+                    sensor data.
+                  </span>
+
+                </div>
+              )}
+
+            {/* EVENTS */}
+
+            {events.map(
+              (event) => {
+
+                const config =
+                  getHazardConfig(
+                    event?.hazard
+                  );
+
+                const risk =
+                  Number(
+                    event?.risk_score ||
+                      0
+                  );
+
+                const riskLevel =
+                  getRiskLevel(
+                    risk
+                  );
+
+                const isSelected =
+                  selectedNode?.node_id ===
+                  event?.node_id;
+
+                return (
+                  <div
+                    className={`node-item ${
+                      isSelected
+                        ? "node-item-selected"
+                        : ""
+                    }`}
+                    key={
+                      event?.node_id ||
+                      event?.id
+                    }
+                    onClick={() =>
+                      setSelectedNode(
+                        event
+                      )
+                    }
+                  >
+
+                    <div
+                      className="node-icon"
+                      style={{
+                        borderColor:
+                          getRiskColor(
+                            risk
+                          ),
+                        boxShadow: `0 0 12px ${getRiskColor(
+                          risk
+                        )}55`,
+                      }}
+                    >
+                      {
+                        config.icon
+                      }
+                    </div>
+
+                    <div className="node-info">
+
+                      <strong>
+                        {
+                          config.name
+                        }
+                      </strong>
+
+                      <span>
+                        {
+                          event?.node_id ||
+                          "--"
+                        }
+                      </span>
+
+                    </div>
+
+                    <div className="node-risk">
+
+                      <strong
+                        style={{
+                          color:
+                            getRiskColor(
+                              risk
+                            ),
+                        }}
+                      >
+                        {risk.toFixed(
+                          1
+                        )}
+                        %
+                      </strong>
+
+                      <span>
+                        {
+                          event?.severity ||
+                          riskLevel
+                        }
+                      </span>
+
+                    </div>
+
+                  </div>
+                );
+              }
+            )}
 
           </div>
 
-        </section>
+        </div>
 
       </div>
 
+      {/* ================================================
+          SELECTED NODE DETAILS
+      ================================================= */}
 
-      {/* ====================================================
-          ERROR MESSAGE
-      ==================================================== */}
+      {selectedNode && (
+        <div className="selected-node-card">
 
-      {error && (
+          <div>
 
-        <div className="backend-error">
+            <span className="live-map-eyebrow">
+              SELECTED EVENT
+            </span>
 
-          <strong>
-            Backend connection problem
-          </strong>
+            <h2>
+              {
+                getHazardConfig(
+                  selectedNode.hazard
+                ).icon
+              }{" "}
+              {
+                getHazardConfig(
+                  selectedNode.hazard
+                ).name
+              }
+            </h2>
 
-          <span>
-            {error}
-          </span>
+            <p>
+              Node{" "}
+              <strong>
+                {
+                  selectedNode.node_id
+                }
+              </strong>
+              {" • "}
+              Risk{" "}
+              <strong>
+                {
+                  Number(
+                    selectedNode.risk_score ||
+                      0
+                  ).toFixed(1)
+                }
+                %
+              </strong>
+            </p>
 
-          <button
-            type="button"
-            onClick={loadEvents}
-          >
-            Retry
-          </button>
+          </div>
+
+          <div className="selected-node-metrics">
+
+            <div>
+              <span>
+                SEVERITY
+              </span>
+
+              <strong>
+                {
+                  selectedNode.severity ||
+                  "--"
+                }
+              </strong>
+            </div>
+
+            <div>
+              <span>
+                CONFIDENCE
+              </span>
+
+              <strong>
+                {selectedNode.confidence !=
+                null
+                  ? `${selectedNode.confidence}%`
+                  : "--"}
+              </strong>
+            </div>
+
+            <div>
+              <span>
+                TREND
+              </span>
+
+              <strong>
+                {
+                  selectedNode.trend ||
+                  "--"
+                }
+              </strong>
+            </div>
+
+            <div>
+              <span>
+                STATUS
+              </span>
+
+              <strong>
+                {
+                  selectedNode.status ||
+                  "ACTIVE"
+                }
+              </strong>
+            </div>
+
+          </div>
 
         </div>
       )}
 
+      {/* ================================================
+          FOOTER
+      ================================================= */}
+
+      <div className="live-map-footer">
+
+        <div>
+
+          <span className="footer-pulse"></span>
+
+          <strong>
+            ENVIGUARD SENSOR NETWORK{" "}
+            {error
+              ? "OFFLINE"
+              : "ONLINE"}
+          </strong>
+
+        </div>
+
+        <span>
+          Automatic refresh every 5 seconds
+        </span>
+
+      </div>
+
     </div>
   );
 }
-
-
-export default LiveMap;

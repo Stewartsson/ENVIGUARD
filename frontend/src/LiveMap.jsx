@@ -359,7 +359,7 @@ export default function LiveMap() {
       const baseURL = String(API || "").replace(/\/+$/, "");
 
       const response = await fetch(
-        `${baseURL}/api/events?_t=${Date.now()}`,
+        `${baseURL}/events?_t=${Date.now()}`,
         {
           method: "GET",
 

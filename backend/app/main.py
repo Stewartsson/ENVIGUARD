@@ -1700,7 +1700,12 @@ def get_prediction(
             event.trend,
 
         "prediction":
-            event.prediction
+            event.prediction,
+
+        "predicted_risk":
+            min(100.0, float(event.risk_score or 0) + 15.0) if event.trend in ["RISING", "RAPID_RISE"]
+            else max(0.0, float(event.risk_score or 0) - 10.0) if event.trend == "FALLING"
+            else float(event.risk_score or 0)
     }
 
 

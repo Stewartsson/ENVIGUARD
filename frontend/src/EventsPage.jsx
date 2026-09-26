@@ -13,7 +13,7 @@ import {
 
 import "./EventsPage.css";
 
-const API_URL = "https://enviguard-backend.onrender.com";
+import API_URL from "./api";
 
 const HAZARD_INFO = {
   flood: {
@@ -135,7 +135,7 @@ export default function EventsPage() {
 
       setError("");
 
-      const response = await fetch(`${API_URL}/api/events`);
+      const response = await fetch(`${API_URL}/events`);
 
       if (!response.ok) {
         throw new Error(`Backend returned ${response.status}`);

@@ -59,6 +59,19 @@ app.add_middleware(
 
 Base.metadata.create_all(bind=engine)
 
+# ============================================================
+# FIREBASE INTEGRATION
+# ============================================================
+
+from .firebase_bridge import start_firebase_bridge
+
+@app.on_event("startup")
+def startup_event():
+    # Automatically starts listening to Firebase Realtime Database
+    # when the FastAPI server spins up.
+    start_firebase_bridge()
+
+
 
 def get_db():
 

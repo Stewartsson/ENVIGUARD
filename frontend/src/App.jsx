@@ -232,6 +232,7 @@ function App() {
       console.error("Alerts API error:", error);
     }
 
+    setBackendOnline(apiReachable);
     setLoading(false);
   };
 
